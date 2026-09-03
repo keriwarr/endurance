@@ -166,3 +166,42 @@ test('findWin: seven in a row still wins', () => {
   const s = line(1, [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0]]);
   assert.ok(R.findWin(s).line.length >= 6);
 });
+
+// --- Serialization (share links / persistence) ---
+// serialize -> plain object; parse -> state. Players are derived from index, so
+// only cell coords need to travel. The undone redo branch is not shared.
+test('serialize/parse round-trips an empty game', () => {
+  const s = R.initialState();
+  assert.deepEqual(R.parseGame(R.serializeGame(s)), s);
+});
+test('serialize/parse round-trips moves and rederives players', () => {
+  let s = R.place(R.initialState(), { q: 0, r: 0 });
+  s = R.place(s, { q: 1, r: 0 });
+  s = R.place(s, { q: 0, r: 1 });
+  const back = R.parseGame(R.serializeGame(s));
+  assert.deepEqual(back.moves, s.moves);
+  assert.equal(back.cursor, 3);
+});
+test('serialize drops the undone redo branch', () => {
+  let s = R.place(R.initialState(), { q: 0, r: 0 });
+  s = R.place(s, { q: 1, r: 0 });
+  s = R.undo(s); // cursor now 1, move[1] is an undone branch
+  const back = R.parseGame(R.serializeGame(s));
+  assert.equal(back.moves.length, 1);
+  assert.equal(back.cursor, 1);
+});
+test('serialize/parse round-trips markups', () => {
+  const s = {
+    moves: [{ q: 0, r: 0, player: 1 }], cursor: 1,
+    markups: [
+      { color: 'neutral', a: { q: 0, r: 0 }, b: { q: 0, r: 0 } },
+      { color: 'yellow', a: { q: 1, r: -1 }, b: { q: 3, r: -3 } },
+    ],
+  };
+  assert.deepEqual(R.parseGame(R.serializeGame(s)).markups, s.markups);
+});
+test('parseGame rejects malformed input by returning null', () => {
+  assert.equal(R.parseGame(null), null);
+  assert.equal(R.parseGame({}), null);
+  assert.equal(R.parseGame({ v: 999, m: [] }), null);
+});

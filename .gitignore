@@ -1,2 +1,6 @@
 node_modules/
 .DS_Store
+_drive.mjs
+_share.mjs
+package.json
+package-lock.json

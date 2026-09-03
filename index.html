@@ -2,9 +2,231 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Endurance</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="color-scheme" content="dark" />
+<title>Endurance — Infinite Hexagonal Connection</title>
+<style>
+  :root {
+    --bg: #0a0f1e;
+    --grid-stroke: #1a2540;
+    --grid-fill: #0d1424;
+    --p1: #4cc2ff;
+    --p1-deep: #1c6fb0;
+    --p2: #f4b63f;
+    --p2-deep: #b07d15;
+    --ink: #eaf1fb;
+    --muted: #8697b8;
+    --panel: rgba(14, 21, 40, 0.82);
+    --panel-solid: #0e1526;
+    --hair: rgba(255, 255, 255, 0.08);
+    --hair-strong: rgba(255, 255, 255, 0.16);
+    --mark-neutral: #cdd9ef;
+    --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--ink);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  #app { position: fixed; inset: 0; }
+
+  /* Board: the hero. A radial vignette gives the infinite field depth. */
+  #board {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    display: block; touch-action: none; cursor: grab;
+    background:
+      radial-gradient(120% 120% at 50% 42%, #0e1730 0%, var(--bg) 62%, #070b16 100%);
+  }
+  #board.grabbing { cursor: grabbing; }
+  #board.marking { cursor: crosshair; }
+  /* non-scaling-stroke keeps lines crisp at every zoom level. */
+  .hex-grid { fill: var(--grid-fill); stroke: var(--grid-stroke); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .stone { stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  .stone.p1 { fill: var(--p1); stroke: #bfe8ff; }
+  .stone.p2 { fill: var(--p2); stroke: #ffe6ac; }
+  .stone.dim { opacity: 0.9; }
+  .stone.last { filter: drop-shadow(0 0 6px currentColor); }
+  .stone.win { animation: winpulse 1.4s ease-in-out infinite; }
+  .stone.settle { animation: settle 0.22s ease-out; }
+  @keyframes settle { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  @keyframes winpulse { 0%, 100% { filter: drop-shadow(0 0 3px currentColor); } 50% { filter: drop-shadow(0 0 12px currentColor); } }
+  .mark-line { stroke-width: 3.5; stroke-linecap: round; fill: none; opacity: 0.85; vector-effect: non-scaling-stroke; }
+  .mark-cell { fill: none; stroke-width: 3; opacity: 0.9; vector-effect: non-scaling-stroke; }
+  .mark-neutral { color: var(--mark-neutral); stroke: var(--mark-neutral); }
+  .mark-yellow { color: var(--p2); stroke: var(--p2); }
+  .mark-blue { color: var(--p1); stroke: var(--p1); }
+  .mark-preview { opacity: 0.5; stroke-dasharray: 6 6; }
+  .ghost { fill: rgba(255,255,255,0.10); stroke: var(--hair-strong); stroke-width: 1.5; }
+  .ghost.p1 { fill: rgba(76,194,255,0.16); stroke: var(--p1); }
+  .ghost.p2 { fill: rgba(244,182,63,0.16); stroke: var(--p2); }
+
+  /* Chrome */
+  .topbar {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; gap: 16px; pointer-events: none;
+  }
+  .topbar > * { pointer-events: auto; }
+  .brand { display: flex; align-items: center; gap: 12px; user-select: none; }
+  .brand-mark {
+    width: 34px; height: 34px; display: grid; place-items: center;
+    color: var(--p1); filter: drop-shadow(0 0 6px rgba(76,194,255,0.35));
+  }
+  .brand-name {
+    font-size: 18px; font-weight: 800; letter-spacing: 0.32em;
+    line-height: 1; padding-left: 0.32em;
+  }
+  .brand-sub { font-size: 11px; color: var(--muted); letter-spacing: 0.06em; margin-top: 4px; }
+  .actions { display: flex; gap: 10px; }
+
+  .btn {
+    font-family: inherit; font-size: 14px; font-weight: 600; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--hair);
+    padding: 9px 16px; border-radius: 10px; cursor: pointer;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    transition: background 0.15s, border-color 0.15s, transform 0.05s;
+  }
+  .btn:hover { background: rgba(30,42,74,0.9); border-color: var(--hair-strong); }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .btn-primary {
+    background: linear-gradient(180deg, #2b8fd6, #1f6fb0);
+    border-color: #3aa0e6; color: #fff;
+    box-shadow: 0 2px 14px rgba(31,111,176,0.4);
+  }
+  .btn-primary:hover { background: linear-gradient(180deg, #34a0ea, #2a7fc4); }
+
+  /* Turn banner */
+  .status {
+    position: absolute; top: 78px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--hair); border-radius: 14px;
+    padding: 12px 20px; min-width: 260px; text-align: center;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.35); pointer-events: none;
+    transition: border-color 0.25s;
+  }
+  .status-line {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    font-size: 15px; font-weight: 700; letter-spacing: 0.14em;
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+  .p1-color { color: var(--p1); } .p1-bg { background: var(--p1); box-shadow: 0 0 10px var(--p1); }
+  .p2-color { color: var(--p2); } .p2-bg { background: var(--p2); box-shadow: 0 0 10px var(--p2); }
+  .status-sub { font-size: 12.5px; color: var(--muted); margin-top: 5px; letter-spacing: 0.02em; }
+  .status.win { border-color: var(--hair-strong); }
+
+  /* Dock */
+  .dock {
+    position: absolute; right: 20px; bottom: 20px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .icon-btn {
+    width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center;
+    background: var(--panel); border: 1px solid var(--hair); color: var(--ink);
+    cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    transition: background 0.15s, border-color 0.15s, transform 0.05s, opacity 0.15s;
+  }
+  .icon-btn svg { width: 22px; height: 22px; }
+  .icon-btn:hover { background: rgba(30,42,74,0.9); border-color: var(--hair-strong); }
+  .icon-btn:active { transform: translateY(1px); }
+  .icon-btn:disabled { opacity: 0.35; cursor: default; }
+
+  /* Toast */
+  .toast {
+    position: absolute; bottom: 24px; left: 50%; transform: translate(-50%, 12px);
+    background: var(--panel-solid); border: 1px solid var(--hair-strong);
+    color: var(--ink); font-size: 13.5px; padding: 10px 18px; border-radius: 10px;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.45); max-width: 80vw; text-align: center;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* Modal */
+  .scrim {
+    position: absolute; inset: 0; background: rgba(5,8,16,0.72);
+    display: grid; place-items: center; padding: 24px; z-index: 10;
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    opacity: 0; transition: opacity 0.18s;
+  }
+  .scrim.show { opacity: 1; }
+  .modal {
+    background: var(--panel-solid); border: 1px solid var(--hair);
+    border-radius: 18px; padding: 28px; max-width: 720px; width: 100%;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6); transform: translateY(8px);
+    transition: transform 0.18s; max-height: 86vh; overflow: auto;
+  }
+  .scrim.show .modal { transform: translateY(0); }
+  .modal h2 { margin: 0 0 6px; font-size: 26px; font-weight: 800; letter-spacing: -0.01em; }
+  .modal .lede { margin: 0 0 22px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .modal h3 { font-size: 12px; color: var(--muted); letter-spacing: 0.12em; margin: 0 0 14px; font-weight: 700; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 560px) { .cols { grid-template-columns: 1fr; } }
+  .keycard { background: rgba(255,255,255,0.02); border: 1px solid var(--hair); border-radius: 14px; padding: 18px 20px; }
+  .krow { display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: baseline; padding: 7px 0; }
+  .krow .desc { color: var(--muted); font-size: 13.5px; line-height: 1.4; }
+  kbd {
+    display: inline-block; font-family: inherit; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.06em; background: rgba(255,255,255,0.06); color: var(--ink);
+    border: 1px solid var(--hair-strong); border-bottom-width: 2px; border-radius: 6px;
+    padding: 3px 7px; margin-right: 4px;
+  }
+  .rules-list { margin: 0; padding-left: 18px; color: var(--ink); font-size: 14px; line-height: 1.7; }
+  .rules-list b { font-weight: 700; }
+  .foot-note { color: var(--muted); font-size: 13px; line-height: 1.5; margin-top: 18px;
+    border-top: 1px solid var(--hair); padding-top: 16px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
 </head>
 <body>
+<div id="app">
+  <svg id="board" aria-label="Endurance game board"></svg>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+          <path d="M17 3 L29 10 L29 24 L17 31 L5 24 L5 10 Z" stroke="currentColor" stroke-width="2" fill="rgba(76,194,255,0.12)"/>
+          <path d="M17 11 L22 14 L22 20 L17 23 L12 20 L12 14 Z" fill="currentColor"/>
+        </svg>
+      </span>
+      <div>
+        <div class="brand-name">ENDURANCE</div>
+        <div class="brand-sub">Infinite hexagonal connection</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="btn-new" class="btn">New game</button>
+      <button id="btn-share" class="btn btn-primary">Share</button>
+    </div>
+  </header>
+
+  <div id="status" class="status" role="status" aria-live="polite">
+    <div class="status-line"><span id="status-dot" class="dot"></span><span id="status-title"></span></div>
+    <div id="status-sub" class="status-sub"></div>
+  </div>
+
+  <div class="dock">
+    <button id="btn-undo" class="icon-btn" title="Undo (←)" aria-label="Undo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>
+    </button>
+    <button id="btn-redo" class="icon-btn" title="Redo (→)" aria-label="Redo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg>
+    </button>
+    <button id="btn-help" class="icon-btn" title="Board help (?)" aria-label="Board help">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.6 2.2-2.6 3.8"/><circle cx="12" cy="17.5" r="0.6" fill="currentColor"/></svg>
+    </button>
+  </div>
+
+  <div id="toast" class="toast" role="alert"></div>
+  <div id="modal-root"></div>
+</div>
 <script type="module">
 // <RULES_ENGINE>
 // Pure game logic — no DOM. Extracted verbatim by test.mjs for unit testing.
@@ -96,6 +318,32 @@ const findWin = (state) => {
 
 const canUndo = (state) => state.cursor > 0;
 const canRedo = (state) => state.cursor < state.moves.length;
+
+// --- Compact serialization for share links & persistence ---
+// Players are derived from placement order, so only cell coords travel. We share
+// the committed position only (the undone redo branch is dropped).
+const COLOR_CODES = ['neutral', 'yellow', 'blue'];
+const serializeGame = (state) => ({
+  v: 1,
+  m: committedMoves(state).map((mv) => [mv.q, mv.r]),
+  k: (state.markups || []).map((k) => [
+    COLOR_CODES.indexOf(k.color), k.a.q, k.a.r, k.b.q, k.b.r,
+  ]),
+});
+const parseGame = (data) => {
+  if (!data || data.v !== 1 || !Array.isArray(data.m)) return null;
+  try {
+    const moves = data.m.map(([q, r], i) => ({ q, r, player: playerForIndex(i) }));
+    const markups = (data.k || []).map(([c, aq, ar, bq, br]) => ({
+      color: COLOR_CODES[c] || 'neutral',
+      a: { q: aq, r: ar },
+      b: { q: bq, r: br },
+    }));
+    return { moves, cursor: moves.length, markups };
+  } catch {
+    return null;
+  }
+};
 const undo = (state) => (canUndo(state) ? { ...state, cursor: state.cursor - 1 } : state);
 const redo = (state) => (canRedo(state) ? { ...state, cursor: state.cursor + 1 } : state);
 
@@ -114,12 +362,563 @@ const RulesEngine = {
   place,
   findWin,
   WIN_LEN,
+  serializeGame,
+  parseGame,
   canUndo,
   canRedo,
   undo,
   redo,
 };
 // </RULES_ENGINE>
+
+const R = RulesEngine;
+
+/* ============================ Geometry ============================ */
+// Pointy-top hexes. S is the center-to-corner radius at zoom 1.
+const S = 26;
+const SQRT3 = Math.sqrt(3);
+
+const axialToPixel = (q, r) => ({ x: S * SQRT3 * (q + r / 2), y: S * 1.5 * r });
+
+const cubeRound = (q, r) => {
+  let x = q, z = r, y = -x - z;
+  let rx = Math.round(x), ry = Math.round(y), rz = Math.round(z);
+  const dx = Math.abs(rx - x), dy = Math.abs(ry - y), dz = Math.abs(rz - z);
+  if (dx > dy && dx > dz) rx = -ry - rz;
+  else if (dy > dz) ry = -rx - rz;
+  else rz = -rx - ry;
+  return { q: rx, r: rz };
+};
+
+const pixelToAxial = (x, y) => cubeRound((SQRT3 / 3 * x - y / 3) / S, (2 / 3 * y) / S);
+
+// Corner offsets around a hex center, computed once and reused for every tile.
+const HEX_POINTS = Array.from({ length: 6 }, (_, i) => {
+  const a = (Math.PI / 180) * (60 * i - 30);
+  return `${(S * Math.cos(a)).toFixed(2)},${(S * Math.sin(a)).toFixed(2)}`;
+}).join(' ');
+
+/* ============================ DOM refs ============================ */
+const SVGNS = 'http://www.w3.org/2000/svg';
+const board = document.getElementById('board');
+const modalRoot = document.getElementById('modal-root');
+const toastEl = document.getElementById('toast');
+const el = (id) => document.getElementById(id);
+
+// Scene group holds everything and carries the pan/zoom transform.
+const scene = document.createElementNS(SVGNS, 'g');
+const gGrid = document.createElementNS(SVGNS, 'g');
+const gMarks = document.createElementNS(SVGNS, 'g');
+const gStones = document.createElementNS(SVGNS, 'g');
+const gOverlay = document.createElementNS(SVGNS, 'g'); // previews, win-line, ghosts
+scene.append(gGrid, gMarks, gStones, gOverlay);
+board.append(scene);
+
+/* ============================ State ============================ */
+const STORAGE_KEY = 'endurance:v1';
+let game = R.initialState();
+let view = { panX: 0, panY: 0, zoom: 1 };
+const MIN_ZOOM = 0.4, MAX_ZOOM = 2.6;
+
+/* ============================ Persistence ============================ */
+let saveTimer = null;
+const persist = () => {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ game, view }));
+    } catch { /* storage full or unavailable — game still playable in-memory */ }
+  }, 120);
+};
+const loadPersisted = () => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || !Array.isArray(data.game?.moves)) return null;
+    return data;
+  } catch { return null; }
+};
+
+/* ===================== Share-link codec (base64url) ===================== */
+const encodeShare = (g) => {
+  const json = JSON.stringify(R.serializeGame(g));
+  return btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+const decodeShare = (str) => {
+  try {
+    const b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    return R.parseGame(JSON.parse(atob(b64)));
+  } catch { return null; }
+};
+
+/* ============================ View / transform ============================ */
+const applyTransform = () => {
+  scene.setAttribute(
+    'transform',
+    `translate(${view.panX} ${view.panY}) scale(${view.zoom})`,
+  );
+  maybeRebuildGrid();
+};
+
+const centerOn = (q, r) => {
+  const p = axialToPixel(q, r);
+  view.panX = board.clientWidth / 2 - p.x * view.zoom;
+  view.panY = board.clientHeight / 2 - p.y * view.zoom;
+};
+
+const screenToCell = (sx, sy) =>
+  pixelToAxial((sx - view.panX) / view.zoom, (sy - view.panY) / view.zoom);
+
+/* ============================ Grid rendering ============================ */
+let lastGridKey = '';
+const visibleRows = () => {
+  const W = board.clientWidth, H = board.clientHeight, m = 2;
+  const sy = (py) => (py - view.panY) / view.zoom;
+  const sx = (px) => (px - view.panX) / view.zoom;
+  const rTop = (2 / 3 * sy(0)) / S, rBot = (2 / 3 * sy(H)) / S;
+  const rmin = Math.floor(rTop) - m, rmax = Math.ceil(rBot) + m;
+  const qForX = (x, r) => x / (S * SQRT3) - r / 2;
+  return { rmin, rmax, qLeftFn: (r) => Math.floor(qForX(sx(0), r)) - m,
+           qRightFn: (r) => Math.ceil(qForX(sx(W), r)) + m };
+};
+const maybeRebuildGrid = () => {
+  const { rmin, rmax, qLeftFn, qRightFn } = visibleRows();
+  const rMid = Math.round((rmin + rmax) / 2);
+  const key = `${rmin}:${rmax}:${qLeftFn(rMid)}:${qRightFn(rMid)}:${view.zoom.toFixed(2)}`;
+  if (key === lastGridKey) return;
+  lastGridKey = key;
+  const frag = document.createDocumentFragment();
+  for (let r = rmin; r <= rmax; r++) {
+    const qL = qLeftFn(r), qR = qRightFn(r);
+    for (let q = qL; q <= qR; q++) {
+      const p = axialToPixel(q, r);
+      const poly = document.createElementNS(SVGNS, 'polygon');
+      poly.setAttribute('class', 'hex-grid');
+      poly.setAttribute('points', HEX_POINTS);
+      poly.setAttribute('transform', `translate(${p.x} ${p.y})`);
+      frag.append(poly);
+    }
+  }
+  gGrid.replaceChildren(frag);
+};
+
+/* ============================ Stones + markup rendering ============================ */
+const mkHexAt = (parent, q, r, cls, animate) => {
+  const p = axialToPixel(q, r);
+  const poly = document.createElementNS(SVGNS, 'polygon');
+  poly.setAttribute('class', cls + (animate ? ' settle' : ''));
+  poly.setAttribute('points', HEX_POINTS);
+  poly.setAttribute('transform', `translate(${p.x} ${p.y})`);
+  poly.style.transformBox = 'fill-box';
+  poly.style.transformOrigin = 'center';
+  parent.append(poly);
+  return poly;
+};
+
+let prevCommitted = 0;
+const renderStones = () => {
+  const committed = R.committedMoves(game);
+  const win = R.findWin(game);
+  const winKeys = win ? new Set(win.line.map(R.keyOf)) : null;
+  const justPlaced = committed.length === prevCommitted + 1;
+  gStones.replaceChildren();
+  committed.forEach((m, i) => {
+    const isLast = i === committed.length - 1;
+    let cls = `stone p${m.player}`;
+    if (winKeys && winKeys.has(R.keyOf(m))) cls += ' win';
+    else if (isLast) cls += ' last';
+    mkHexAt(gStones, m.q, m.r, cls, justPlaced && isLast);
+  });
+  prevCommitted = committed.length;
+};
+
+const cellCenter = (c) => axialToPixel(c.q, c.r);
+const renderMarks = () => {
+  gMarks.replaceChildren();
+  for (const k of game.markups || []) {
+    const cls = `mark-${k.color}`;
+    if (k.a.q === k.b.q && k.a.r === k.b.r) {
+      const p = cellCenter(k.a);
+      const poly = document.createElementNS(SVGNS, 'polygon');
+      poly.setAttribute('class', `mark-cell ${cls}`);
+      poly.setAttribute('points', HEX_POINTS);
+      poly.setAttribute('transform', `translate(${p.x} ${p.y})`);
+      gMarks.append(poly);
+    } else {
+      const a = cellCenter(k.a), b = cellCenter(k.b);
+      const ln = document.createElementNS(SVGNS, 'line');
+      ln.setAttribute('class', `mark-line ${cls}`);
+      ln.setAttribute('x1', a.x); ln.setAttribute('y1', a.y);
+      ln.setAttribute('x2', b.x); ln.setAttribute('y2', b.y);
+      gMarks.append(ln);
+    }
+  }
+};
+
+/* ============================ HUD ============================ */
+const setHud = () => {
+  const win = R.findWin(game);
+  const dot = el('status-dot'), title = el('status-title'), sub = el('status-sub');
+  const statusEl = el('status');
+  if (win) {
+    dot.className = `dot p${win.player}-bg`;
+    title.textContent = `PLAYER ${win.player} WINS`;
+    title.className = `p${win.player}-color`;
+    sub.textContent = 'Six in a row. Undo to keep exploring, or start a new game.';
+    statusEl.classList.add('win');
+  } else {
+    const p = R.currentPlayer(game);
+    const left = R.placementsRemaining(game);
+    dot.className = `dot p${p}-bg`;
+    title.textContent = `PLAYER ${p} TO MOVE`;
+    title.className = `p${p}-color`;
+    sub.textContent = game.cursor === 0
+      ? 'Place your opening hex at the center.'
+      : `${left} placement${left === 1 ? '' : 's'} left this turn.`;
+    statusEl.classList.remove('win');
+  }
+  el('btn-undo').disabled = !R.canUndo(game);
+  el('btn-redo').disabled = !R.canRedo(game);
+};
+
+/* ============================ Commit helpers ============================ */
+const renderState = () => { renderStones(); renderMarks(); setHud(); persist(); };
+const setGame = (next) => { if (next) { game = next; renderState(); } };
+
+/* ============================ Toast ============================ */
+let toastTimer = null;
+const toast = (msg) => {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1800);
+};
+
+/* ============================ Placement ============================ */
+const tryPlace = (cell) => {
+  if (R.findWin(game)) { toast('Game over — undo or start a new game.'); return; }
+  if (!R.isLegalPlacement(game, cell)) {
+    const committed = R.committedMoves(game);
+    if (committed.length === 0) toast('The opening hex goes on the center.');
+    else if (R.occupancy(game).has(R.keyOf(cell))) toast('That hex is taken.');
+    else toast('Too far — stay within 8 hexes of the action.');
+    return;
+  }
+  setGame(R.place(game, cell));
+  const w = R.findWin(game);
+  if (w) toast(`Player ${w.player} connects six!`);
+};
+
+/* ============================ Markup ============================ */
+const colorFromModifiers = (e, leftDraw) =>
+  e.altKey ? 'blue' : (leftDraw ? (e.ctrlKey ? 'yellow' : 'neutral')
+                                : (e.shiftKey || e.ctrlKey ? 'yellow' : 'neutral'));
+const sameCell = (a, b) => a.q === b.q && a.r === b.r;
+const markCovers = (k, cell) => sameCell(k.a, cell) || sameCell(k.b, cell);
+
+const addMarkup = (a, b, color) => {
+  const markups = [...(game.markups || []), { color, a, b }];
+  setGame({ ...game, markups });
+};
+const toggleMarkAt = (cell, color) => {
+  const existing = (game.markups || []).filter((k) => markCovers(k, cell));
+  if (existing.length) {
+    setGame({ ...game, markups: game.markups.filter((k) => !markCovers(k, cell)) });
+  } else {
+    addMarkup(cell, cell, color);
+  }
+};
+
+/* ============================ Pointer input ============================ */
+const CLICK_SLOP = 5; // px of movement below which a press counts as a click
+let drag = null;
+const pointers = new Map(); // active pointers by id, for two-finger pinch
+let pinch = null;
+
+const showMarkPreview = (a, b, color) => {
+  gOverlay.replaceChildren();
+  const cls = `mark-${color} mark-preview`;
+  if (sameCell(a, b)) {
+    const p = cellCenter(a);
+    const poly = document.createElementNS(SVGNS, 'polygon');
+    poly.setAttribute('class', `mark-cell ${cls}`);
+    poly.setAttribute('points', HEX_POINTS);
+    poly.setAttribute('transform', `translate(${p.x} ${p.y})`);
+    gOverlay.append(poly);
+  } else {
+    const pa = cellCenter(a), pb = cellCenter(b);
+    const ln = document.createElementNS(SVGNS, 'line');
+    ln.setAttribute('class', `mark-line ${cls}`);
+    ln.setAttribute('x1', pa.x); ln.setAttribute('y1', pa.y);
+    ln.setAttribute('x2', pb.x); ln.setAttribute('y2', pb.y);
+    gOverlay.append(ln);
+  }
+};
+
+const startPinch = () => {
+  const [a, b] = [...pointers.values()];
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  pinch = {
+    startDist: Math.hypot(a.x - b.x, a.y - b.y),
+    startZoom: view.zoom,
+    scenePt: { x: (mid.x - view.panX) / view.zoom, y: (mid.y - view.panY) / view.zoom },
+  };
+  drag = null; // a second finger cancels any pan/mark/click in progress
+  gOverlay.replaceChildren();
+  board.classList.remove('grabbing', 'marking');
+};
+
+board.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 && e.button !== 2) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) { startPinch(); return; }
+  if (pointers.size > 2) return;
+  board.setPointerCapture(e.pointerId);
+  const marking = e.button === 2 || (e.button === 0 && e.shiftKey);
+  drag = {
+    id: e.pointerId, marking, moved: false,
+    startX: e.clientX, startY: e.clientY,
+    originPan: { ...view }, startCell: screenToCell(e.clientX, e.clientY),
+    color: colorFromModifiers(e, e.button === 0),
+  };
+  board.classList.add(marking ? 'marking' : 'grabbing');
+});
+
+board.addEventListener('pointermove', (e) => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && pointers.size >= 2) {
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinch.startZoom * (dist / pinch.startDist)));
+    view.zoom = z;
+    view.panX = mid.x - pinch.scenePt.x * z;
+    view.panY = mid.y - pinch.scenePt.y * z;
+    applyTransform();
+    return;
+  }
+  if (!drag || e.pointerId !== drag.id) return;
+  const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+  if (!drag.moved && Math.hypot(dx, dy) > CLICK_SLOP) drag.moved = true;
+  if (drag.marking) {
+    if (drag.moved) showMarkPreview(drag.startCell, screenToCell(e.clientX, e.clientY), drag.color);
+  } else {
+    view.panX = drag.originPan.panX + dx;
+    view.panY = drag.originPan.panY + dy;
+    applyTransform();
+  }
+});
+
+const endDrag = (e) => {
+  pointers.delete(e.pointerId);
+  if (pinch) { if (pointers.size < 2) { pinch = null; persist(); } return; }
+  if (!drag || e.pointerId !== drag.id) return;
+  board.releasePointerCapture?.(e.pointerId);
+  board.classList.remove('grabbing', 'marking');
+  gOverlay.replaceChildren();
+  const endCell = screenToCell(e.clientX, e.clientY);
+  if (drag.marking) {
+    if (drag.moved) addMarkup(drag.startCell, endCell, drag.color);
+    else toggleMarkAt(drag.startCell, drag.color); // plain right-click toggles a cell mark
+  } else if (!drag.moved) {
+    tryPlace(drag.startCell);
+  }
+  persist();
+  drag = null;
+};
+board.addEventListener('pointerup', endDrag);
+board.addEventListener('pointercancel', endDrag);
+board.addEventListener('contextmenu', (e) => e.preventDefault());
+
+/* ============================ Zoom ============================ */
+board.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.zoom * factor));
+  if (z === view.zoom) return;
+  // Keep the point under the cursor fixed while zooming.
+  const sx = (e.clientX - view.panX) / view.zoom;
+  const sy = (e.clientY - view.panY) / view.zoom;
+  view.zoom = z;
+  view.panX = e.clientX - sx * z;
+  view.panY = e.clientY - sy * z;
+  applyTransform();
+  persist();
+}, { passive: false });
+
+/* ============================ Keyboard ============================ */
+window.addEventListener('keydown', (e) => {
+  if (isModalOpen()) {
+    if (e.key === 'Escape') closeModal();
+    return;
+  }
+  if (e.key === 'ArrowLeft') { setGame(R.undo(game)); }
+  else if (e.key === 'ArrowRight') { setGame(R.redo(game)); }
+  else if (e.key === '?' || e.key === 'F1') { e.preventDefault(); openHelp(); }
+});
+
+/* ============================ Buttons ============================ */
+el('btn-undo').addEventListener('click', () => setGame(R.undo(game)));
+el('btn-redo').addEventListener('click', () => setGame(R.redo(game)));
+el('btn-help').addEventListener('click', openHelp);
+el('btn-new').addEventListener('click', confirmNewGame);
+el('btn-share').addEventListener('click', share);
+
+/* ============================ Modals ============================ */
+const isModalOpen = () => modalRoot.childElementCount > 0;
+function closeModal() {
+  const scrim = modalRoot.firstElementChild;
+  if (!scrim) return;
+  scrim.classList.remove('show');
+  setTimeout(() => scrim.remove(), 180);
+}
+function openModal(html) {
+  modalRoot.replaceChildren();
+  const scrim = document.createElement('div');
+  scrim.className = 'scrim';
+  scrim.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
+  scrim.addEventListener('pointerdown', (e) => { if (e.target === scrim) closeModal(); });
+  modalRoot.append(scrim);
+  requestAnimationFrame(() => scrim.classList.add('show'));
+  return scrim;
+}
+
+function confirmNewGame() {
+  const scrim = openModal(`
+    <h2>Start a new game?</h2>
+    <p class="lede">This clears the current board. Your game is saved in this browser,
+    so if you only want to look back, use Undo instead.</p>
+    <div class="modal-actions">
+      <button class="btn" data-act="cancel">Keep playing</button>
+      <button class="btn btn-primary" data-act="confirm">New game</button>
+    </div>`);
+  scrim.querySelector('[data-act="cancel"]').onclick = closeModal;
+  scrim.querySelector('[data-act="confirm"]').onclick = () => {
+    game = R.initialState();
+    view = { panX: 0, panY: 0, zoom: 1 };
+    centerOn(0, 0);
+    clearShareParam();
+    applyTransform();
+    renderState();
+    closeModal();
+  };
+}
+
+function openHelp() {
+  openModal(`
+    <h2>How to play Endurance</h2>
+    <p class="lede">Two players on an endless hexagonal field. Race to connect six of
+    your own hexes in a straight line — before your opponent does.</p>
+    <div class="cols">
+      <div class="keycard">
+        <h3>THE RULES</h3>
+        <ol class="rules-list">
+          <li>Player 1 opens with <b>one</b> hex on the center.</li>
+          <li>Player 2 replies with <b>two</b> hexes. Every turn after is two.</li>
+          <li>Place only on empty hexes, within <b>8 hexes</b> of the existing play.</li>
+          <li>First to line up <b>six</b> on any of the three axes wins.</li>
+        </ol>
+      </div>
+      <div class="keycard">
+        <h3>SHORTCUTS &amp; MARKUP</h3>
+        <div class="krow"><div><kbd>Drag</kbd></div><div class="desc">Pan the board.</div></div>
+        <div class="krow"><div><kbd>Wheel</kbd> / <kbd>Pinch</kbd></div><div class="desc">Zoom in and out.</div></div>
+        <div class="krow"><div><kbd>Click</kbd></div><div class="desc">Place a hex on your turn.</div></div>
+        <div class="krow"><div><kbd>&larr;</kbd> <kbd>&rarr;</kbd></div><div class="desc">Undo / redo the last placement.</div></div>
+        <div class="krow"><div><kbd>Right-drag</kbd></div><div class="desc">Draw a candidate line; right-click a cell to mark or clear it.</div></div>
+        <div class="krow"><div><kbd>Alt</kbd> / <kbd>Ctrl</kbd> + draw</div><div class="desc">Mark in blue / yellow instead of neutral.</div></div>
+        <div class="krow"><div><kbd>Shift</kbd> + drag</div><div class="desc">Draw markup without the right button.</div></div>
+      </div>
+    </div>
+    <p class="foot-note">Your game lives in this browser and in the share link — navigate
+    away, refresh, or close the tab, and it will be here when you return.</p>
+    <div class="modal-actions">
+      <button class="btn btn-primary" data-act="close">Continue game</button>
+    </div>
+  `).querySelector('[data-act="close"]').onclick = closeModal;
+}
+
+/* ============================ Share ============================ */
+function clearShareParam() {
+  const url = new URL(location.href);
+  url.searchParams.delete('g');
+  history.replaceState(null, '', url);
+}
+async function share() {
+  const url = new URL(location.href);
+  url.searchParams.set('g', encodeShare(game));
+  const link = url.toString();
+  history.replaceState(null, '', link);
+  try {
+    await navigator.clipboard.writeText(link);
+    toast('Share link copied to clipboard.');
+  } catch {
+    toast('Share link is in the address bar — copy it to share.');
+  }
+}
+
+/* ============================ Boot ============================ */
+function samePosition(a, b) {
+  const am = R.committedMoves(a), bm = R.committedMoves(b);
+  return am.length === bm.length &&
+    am.every((m, i) => m.q === bm[i].q && m.r === bm[i].r);
+}
+
+function boot() {
+  const resize = () => {
+    board.setAttribute('width', board.clientWidth);
+    board.setAttribute('height', board.clientHeight);
+    applyTransform();
+  };
+  window.addEventListener('resize', resize);
+
+  const persisted = loadPersisted();
+  const shareParam = new URL(location.href).searchParams.get('g');
+  const shared = shareParam ? decodeShare(shareParam) : null;
+
+  const startWith = (g, v) => {
+    game = g;
+    view = v || { panX: 0, panY: 0, zoom: 1 };
+    if (!v) centerOn(0, 0);
+    board.setAttribute('width', board.clientWidth);
+    board.setAttribute('height', board.clientHeight);
+    applyTransform();
+    renderState();
+  };
+
+  if (shared) {
+    if (persisted && !samePosition(shared, persisted.game) &&
+        R.committedMoves(persisted.game).length > 0) {
+      // Never silently clobber a game in progress — let the player choose.
+      startWith(persisted.game, persisted.view);
+      const scrim = openModal(`
+        <h2>Open shared game?</h2>
+        <p class="lede">This link contains a different game than the one saved in your
+        browser. Opening it replaces your current board. Your saved game isn't lost
+        unless you make a move on the shared one.</p>
+        <div class="modal-actions">
+          <button class="btn" data-act="keep">Keep my game</button>
+          <button class="btn btn-primary" data-act="open">Open shared game</button>
+        </div>`);
+      scrim.querySelector('[data-act="keep"]').onclick = () => { clearShareParam(); closeModal(); };
+      scrim.querySelector('[data-act="open"]').onclick = () => {
+        startWith(shared, null);
+        clearShareParam();
+        closeModal();
+      };
+    } else {
+      startWith(shared, persisted?.view || null);
+      clearShareParam();
+    }
+  } else if (persisted) {
+    startWith(persisted.game, persisted.view);
+  } else {
+    startWith(R.initialState(), null);
+  }
+}
+
+boot();
 </script>
 </body>
 </html>
