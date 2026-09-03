@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Endurance</title>
+</head>
+<body>
+<script type="module">
+// <RULES_ENGINE>
+// Pure game logic — no DOM. Extracted verbatim by test.mjs for unit testing.
+// Axial coords {q, r} for pointy-top hexes; distance via cube coords.
+const hexDistance = (a, b) => {
+  const as = -a.q - a.r, bs = -b.q - b.r;
+  return (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(as - bs)) / 2;
+};
+
+// Turn cadence, derived purely from placement index. The opening hex (index 0)
+// is P1 alone; every placement after comes in pairs (P2, P1, P2, ...). Deriving
+// the mover from the committed count means the turn indicator can never disagree
+// with reality — this is the fix for the original's wrong-color bug.
+const playerForIndex = (i) => {
+  if (i === 0) return 1;
+  const turn = Math.floor((i - 1) / 2) + 2; // opening is turn 1; pairs start at turn 2
+  return turn % 2 === 0 ? 2 : 1;
+};
+const remainingForIndex = (i) => {
+  if (i === 0) return 1;
+  const pair = Math.floor((i - 1) / 2);
+  return (2 + 2 * pair) - i + 1; // placements left in the pair the index sits in
+};
+
+const currentPlayer = (state) => playerForIndex(state.cursor);
+const placementsRemaining = (state) => remainingForIndex(state.cursor);
+
+const MAX_REACH = 8; // a new hex must sit within this hex-distance of an existing one
+const CENTER = { q: 0, r: 0 };
+
+const initialState = () => ({ moves: [], cursor: 0, markups: [] });
+
+// The set of hexes actually on the board = committed placements (moves before the
+// cursor). Moves past the cursor are an undone branch and don't exist on the board.
+const committedMoves = (state) => state.moves.slice(0, state.cursor);
+const keyOf = (c) => `${c.q},${c.r}`;
+const occupancy = (state) => {
+  const map = new Map();
+  for (const m of committedMoves(state)) map.set(keyOf(m), m.player);
+  return map;
+};
+
+const isLegalPlacement = (state, cell) => {
+  const committed = committedMoves(state);
+  if (committed.length === 0) return cell.q === CENTER.q && cell.r === CENTER.r;
+  if (committed.some((m) => m.q === cell.q && m.r === cell.r)) return false;
+  return committed.some((m) => hexDistance(m, cell) <= MAX_REACH);
+};
+
+const place = (state, cell) => {
+  if (!isLegalPlacement(state, cell)) return null;
+  const move = { q: cell.q, r: cell.r, player: playerForIndex(state.cursor) };
+  const moves = committedMoves(state).concat(move); // truncates any undone branch
+  return { ...state, moves, cursor: moves.length };
+};
+
+// The three board axes as direction vectors (each explored in + and - directions):
+// E–W horizontal, and the two diagonals.
+const AXES = [
+  { q: 1, r: 0 },
+  { q: 1, r: -1 },
+  { q: 0, r: 1 },
+];
+const WIN_LEN = 6;
+
+// A win can only be completed by the last hex placed, so we pivot on it and walk
+// each axis in both directions counting same-owner hexes.
+const findWin = (state) => {
+  const committed = committedMoves(state);
+  if (committed.length === 0) return null;
+  const pivot = committed[committed.length - 1];
+  const { player } = pivot;
+  const owned = new Set(
+    committed.filter((m) => m.player === player).map(keyOf),
+  );
+  for (const dir of AXES) {
+    const line = [pivot];
+    for (const sign of [1, -1]) {
+      let c = { q: pivot.q + dir.q * sign, r: pivot.r + dir.r * sign };
+      while (owned.has(keyOf(c))) {
+        line.push({ q: c.q, r: c.r });
+        c = { q: c.q + dir.q * sign, r: c.r + dir.r * sign };
+      }
+    }
+    if (line.length >= WIN_LEN) return { player, line };
+  }
+  return null;
+};
+
+const canUndo = (state) => state.cursor > 0;
+const canRedo = (state) => state.cursor < state.moves.length;
+const undo = (state) => (canUndo(state) ? { ...state, cursor: state.cursor - 1 } : state);
+const redo = (state) => (canRedo(state) ? { ...state, cursor: state.cursor + 1 } : state);
+
+const RulesEngine = {
+  hexDistance,
+  playerForIndex,
+  remainingForIndex,
+  currentPlayer,
+  placementsRemaining,
+  MAX_REACH,
+  initialState,
+  committedMoves,
+  keyOf,
+  occupancy,
+  isLegalPlacement,
+  place,
+  findWin,
+  WIN_LEN,
+  canUndo,
+  canRedo,
+  undo,
+  redo,
+};
+// </RULES_ENGINE>
+</script>
+</body>
+</html>
