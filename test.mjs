@@ -167,30 +167,47 @@ test('findWin: seven in a row still wins', () => {
   assert.ok(R.findWin(s).line.length >= 6);
 });
 
-// --- Serialization (share links / persistence) ---
-// serialize -> plain object; parse -> state. Players are derived from index, so
-// only cell coords need to travel. The undone redo branch is not shared.
-test('serialize/parse round-trips an empty game', () => {
-  const s = R.initialState();
-  assert.deepEqual(R.parseGame(R.serializeGame(s)), s);
+// --- Playable cells (which empty hexes may be placed on right now) ---
+test('playableCells: the opening allows only the center', () => {
+  assert.deepEqual(R.playableCells(R.initialState()), [{ q: 0, r: 0 }]);
 });
-test('serialize/parse round-trips moves and rederives players', () => {
+test('playableCells: after the opening, empty cells within reach only', () => {
+  const s = R.place(R.initialState(), { q: 0, r: 0 });
+  const keys = new Set(R.playableCells(s).map(R.keyOf));
+  assert.equal(keys.has('0,0'), false); // occupied hex is excluded
+  assert.equal(keys.has('8,0'), true);  // exactly 8 away: reachable
+  assert.equal(keys.has('9,0'), false); // beyond reach
+  assert.equal(keys.size, 216);         // full radius-8 disk minus the center
+});
+test('playableCells: none once the game is won', () => {
+  const s = line(1, [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0]]);
+  assert.deepEqual(R.playableCells(s), []);
+});
+
+// --- Compact share-link codec (URL-safe string; no base64, no JSON) ---
+// Players are derived from index, so only cell coords travel. The undone redo
+// branch is not shared.
+test('encode/decode round-trips an empty game', () => {
+  const s = R.initialState();
+  assert.deepEqual(R.decodeState(R.encodeState(s)), s);
+});
+test('encode/decode round-trips moves and rederives players', () => {
   let s = R.place(R.initialState(), { q: 0, r: 0 });
   s = R.place(s, { q: 1, r: 0 });
   s = R.place(s, { q: 0, r: 1 });
-  const back = R.parseGame(R.serializeGame(s));
+  const back = R.decodeState(R.encodeState(s));
   assert.deepEqual(back.moves, s.moves);
   assert.equal(back.cursor, 3);
 });
-test('serialize drops the undone redo branch', () => {
+test('encode drops the undone redo branch', () => {
   let s = R.place(R.initialState(), { q: 0, r: 0 });
   s = R.place(s, { q: 1, r: 0 });
-  s = R.undo(s); // cursor now 1, move[1] is an undone branch
-  const back = R.parseGame(R.serializeGame(s));
+  s = R.undo(s);
+  const back = R.decodeState(R.encodeState(s));
   assert.equal(back.moves.length, 1);
   assert.equal(back.cursor, 1);
 });
-test('serialize/parse round-trips markups', () => {
+test('encode/decode round-trips markups', () => {
   const s = {
     moves: [{ q: 0, r: 0, player: 1 }], cursor: 1,
     markups: [
@@ -198,10 +215,19 @@ test('serialize/parse round-trips markups', () => {
       { color: 'yellow', a: { q: 1, r: -1 }, b: { q: 3, r: -3 } },
     ],
   };
-  assert.deepEqual(R.parseGame(R.serializeGame(s)).markups, s.markups);
+  assert.deepEqual(R.decodeState(R.encodeState(s)).markups, s.markups);
 });
-test('parseGame rejects malformed input by returning null', () => {
-  assert.equal(R.parseGame(null), null);
-  assert.equal(R.parseGame({}), null);
-  assert.equal(R.parseGame({ v: 999, m: [] }), null);
+test('encoded string is compact and URL-safe', () => {
+  let s = R.place(R.initialState(), { q: 0, r: 0 });
+  s = R.place(s, { q: 1, r: 0 });
+  s = R.place(s, { q: -1, r: 0 });
+  const enc = R.encodeState(s);
+  assert.match(enc, /^[0-9._-]+$/); // no chars a URL would percent-encode
+  assert.ok(enc.length < 30, `expected compact, got ${enc.length}: ${enc}`);
+});
+test('decodeState rejects malformed input by returning null', () => {
+  assert.equal(R.decodeState(null), null);
+  assert.equal(R.decodeState('garbage'), null);
+  assert.equal(R.decodeState('9.0_0.'), null);      // wrong version
+  assert.equal(R.decodeState('1.0_0_1.'), null);     // odd coord count
 });

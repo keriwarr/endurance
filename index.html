@@ -8,8 +8,8 @@
 <style>
   :root {
     --bg: #0a0f1e;
-    --grid-stroke: #1a2540;
-    --grid-fill: #0d1424;
+    --grid-stroke: #263752;
+    --grid-fill: #0f1930;
     --p1: #4cc2ff;
     --p1-deep: #1c6fb0;
     --p2: #f4b63f;
@@ -44,14 +44,22 @@
   #board.marking { cursor: crosshair; }
   /* non-scaling-stroke keeps lines crisp at every zoom level. */
   .hex-grid { fill: var(--grid-fill); stroke: var(--grid-stroke); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  /* When the only legal move is the opening, gently pulse it to invite the click. */
+  .opening-hint .hex-grid { animation: openpulse 1.8s ease-in-out infinite; }
+  @keyframes openpulse {
+    0%, 100% { fill: var(--grid-fill); stroke: var(--grid-stroke); }
+    50% { fill: rgba(76,194,255,0.18); stroke: var(--p1); }
+  }
   .stone { stroke-width: 1.5; vector-effect: non-scaling-stroke; }
   .stone.p1 { fill: var(--p1); stroke: #bfe8ff; }
   .stone.p2 { fill: var(--p2); stroke: #ffe6ac; }
   .stone.dim { opacity: 0.9; }
   .stone.last { filter: drop-shadow(0 0 6px currentColor); }
   .stone.win { animation: winpulse 1.4s ease-in-out infinite; }
-  .stone.settle { animation: settle 0.22s ease-out; }
-  @keyframes settle { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  /* A fast cosmetic pop — the hex is at full position/size instantly; this only
+     scales it up from 0.6 over 130ms so quick play stays perfectly responsive. */
+  .stone.settle { animation: settle 0.13s ease-out; }
+  @keyframes settle { from { transform: scale(0.6); opacity: 0.5; } to { transform: scale(1); opacity: 1; } }
   @keyframes winpulse { 0%, 100% { filter: drop-shadow(0 0 3px currentColor); } 50% { filter: drop-shadow(0 0 12px currentColor); } }
   .mark-line { stroke-width: 3.5; stroke-linecap: round; fill: none; opacity: 0.85; vector-effect: non-scaling-stroke; }
   .mark-cell { fill: none; stroke-width: 3; opacity: 0.9; vector-effect: non-scaling-stroke; }
@@ -319,30 +327,64 @@ const findWin = (state) => {
 const canUndo = (state) => state.cursor > 0;
 const canRedo = (state) => state.cursor < state.moves.length;
 
-// --- Compact serialization for share links & persistence ---
-// Players are derived from placement order, so only cell coords travel. We share
-// the committed position only (the undone redo branch is dropped).
-const COLOR_CODES = ['neutral', 'yellow', 'blue'];
-const serializeGame = (state) => ({
-  v: 1,
-  m: committedMoves(state).map((mv) => [mv.q, mv.r]),
-  k: (state.markups || []).map((k) => [
-    COLOR_CODES.indexOf(k.color), k.a.q, k.a.r, k.b.q, k.b.r,
-  ]),
-});
-const parseGame = (data) => {
-  if (!data || data.v !== 1 || !Array.isArray(data.m)) return null;
-  try {
-    const moves = data.m.map(([q, r], i) => ({ q, r, player: playerForIndex(i) }));
-    const markups = (data.k || []).map(([c, aq, ar, bq, br]) => ({
-      color: COLOR_CODES[c] || 'neutral',
-      a: { q: aq, r: ar },
-      b: { q: bq, r: br },
-    }));
-    return { moves, cursor: moves.length, markups };
-  } catch {
-    return null;
+// The empty hexes a player may legally place on right now. Only these are drawn,
+// which doubles as the "where can I play" affordance: just the center to open,
+// then the union of radius-8 disks around existing hexes, minus occupied cells.
+const playableCells = (state) => {
+  if (findWin(state)) return [];
+  const committed = committedMoves(state);
+  if (committed.length === 0) return [{ q: CENTER.q, r: CENTER.r }];
+  const taken = new Set(committed.map(keyOf));
+  const out = new Map();
+  for (const m of committed) {
+    for (let dq = -MAX_REACH; dq <= MAX_REACH; dq++) {
+      const lo = Math.max(-MAX_REACH, -dq - MAX_REACH);
+      const hi = Math.min(MAX_REACH, -dq + MAX_REACH);
+      for (let dr = lo; dr <= hi; dr++) {
+        const c = { q: m.q + dq, r: m.r + dr };
+        const k = keyOf(c);
+        if (!taken.has(k)) out.set(k, c);
+      }
+    }
   }
+  return [...out.values()];
+};
+
+// --- Compact share-link codec: "1.<coords>.<markups>" ---
+// Players are derived from placement order, so only cell coords travel. Every
+// character is URL-safe (digits, '.', '_', '-'), so no base64 or JSON is needed —
+// which keeps share links short. The undone redo branch is dropped.
+const COLOR_CODES = ['neutral', 'yellow', 'blue'];
+const encodeState = (state) => {
+  const coords = committedMoves(state).flatMap((m) => [m.q, m.r]).join('_');
+  const marks = (state.markups || [])
+    .flatMap((k) => [COLOR_CODES.indexOf(k.color), k.a.q, k.a.r, k.b.q, k.b.r])
+    .join('_');
+  return `1.${coords}.${marks}`;
+};
+const decodeState = (str) => {
+  if (typeof str !== 'string') return null;
+  const parts = str.split('.');
+  if (parts.length !== 3 || parts[0] !== '1') return null;
+  const nums = (s) => {
+    if (s === '') return [];
+    const arr = s.split('_').map(Number);
+    return arr.some((n) => !Number.isInteger(n)) ? null : arr;
+  };
+  const flat = nums(parts[1]), mk = nums(parts[2]);
+  if (!flat || !mk || flat.length % 2 !== 0 || mk.length % 5 !== 0) return null;
+  const moves = [];
+  for (let i = 0; i < flat.length; i += 2) {
+    moves.push({ q: flat[i], r: flat[i + 1], player: playerForIndex(i / 2) });
+  }
+  const markups = [];
+  for (let i = 0; i < mk.length; i += 5) {
+    markups.push({
+      color: COLOR_CODES[mk[i]] || 'neutral',
+      a: { q: mk[i + 1], r: mk[i + 2] }, b: { q: mk[i + 3], r: mk[i + 4] },
+    });
+  }
+  return { moves, cursor: moves.length, markups };
 };
 const undo = (state) => (canUndo(state) ? { ...state, cursor: state.cursor - 1 } : state);
 const redo = (state) => (canRedo(state) ? { ...state, cursor: state.cursor + 1 } : state);
@@ -362,8 +404,9 @@ const RulesEngine = {
   place,
   findWin,
   WIN_LEN,
-  serializeGame,
-  parseGame,
+  playableCells,
+  encodeState,
+  decodeState,
   canUndo,
   canRedo,
   undo,
@@ -407,11 +450,12 @@ const el = (id) => document.getElementById(id);
 
 // Scene group holds everything and carries the pan/zoom transform.
 const scene = document.createElementNS(SVGNS, 'g');
-const gGrid = document.createElementNS(SVGNS, 'g');
+const gGrid = document.createElementNS(SVGNS, 'g');   // playable cells
+const gHover = document.createElementNS(SVGNS, 'g');  // cursor placement ghost
 const gMarks = document.createElementNS(SVGNS, 'g');
 const gStones = document.createElementNS(SVGNS, 'g');
-const gOverlay = document.createElementNS(SVGNS, 'g'); // previews, win-line, ghosts
-scene.append(gGrid, gMarks, gStones, gOverlay);
+const gOverlay = document.createElementNS(SVGNS, 'g'); // markup previews, etc.
+scene.append(gGrid, gHover, gMarks, gStones, gOverlay);
 board.append(scene);
 
 /* ============================ State ============================ */
@@ -440,17 +484,9 @@ const loadPersisted = () => {
   } catch { return null; }
 };
 
-/* ===================== Share-link codec (base64url) ===================== */
-const encodeShare = (g) => {
-  const json = JSON.stringify(R.serializeGame(g));
-  return btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
-const decodeShare = (str) => {
-  try {
-    const b64 = str.replace(/-/g, '+').replace(/_/g, '/');
-    return R.parseGame(JSON.parse(atob(b64)));
-  } catch { return null; }
-};
+/* ===================== Share-link codec ===================== */
+const encodeShare = (g) => R.encodeState(g);
+const decodeShare = (str) => R.decodeState(str);
 
 /* ============================ View / transform ============================ */
 const applyTransform = () => {
@@ -458,7 +494,6 @@ const applyTransform = () => {
     'transform',
     `translate(${view.panX} ${view.panY}) scale(${view.zoom})`,
   );
-  maybeRebuildGrid();
 };
 
 const centerOn = (q, r) => {
@@ -470,50 +505,40 @@ const centerOn = (q, r) => {
 const screenToCell = (sx, sy) =>
   pixelToAxial((sx - view.panX) / view.zoom, (sy - view.panY) / view.zoom);
 
-/* ============================ Grid rendering ============================ */
-let lastGridKey = '';
-const visibleRows = () => {
-  const W = board.clientWidth, H = board.clientHeight, m = 2;
-  const sy = (py) => (py - view.panY) / view.zoom;
-  const sx = (px) => (px - view.panX) / view.zoom;
-  const rTop = (2 / 3 * sy(0)) / S, rBot = (2 / 3 * sy(H)) / S;
-  const rmin = Math.floor(rTop) - m, rmax = Math.ceil(rBot) + m;
-  const qForX = (x, r) => x / (S * SQRT3) - r / 2;
-  return { rmin, rmax, qLeftFn: (r) => Math.floor(qForX(sx(0), r)) - m,
-           qRightFn: (r) => Math.ceil(qForX(sx(W), r)) + m };
-};
-const maybeRebuildGrid = () => {
-  const { rmin, rmax, qLeftFn, qRightFn } = visibleRows();
-  const rMid = Math.round((rmin + rmax) / 2);
-  const key = `${rmin}:${rmax}:${qLeftFn(rMid)}:${qRightFn(rMid)}:${view.zoom.toFixed(2)}`;
-  if (key === lastGridKey) return;
-  lastGridKey = key;
+/* ============================ Playable cells ============================ */
+// Only legal placements are drawn (bounded set), so there is no infinite grid to
+// regenerate on pan — panning/zooming is just a transform. We keep the current
+// set so hover can test it in O(1).
+let playableSet = new Set();
+const renderPlayable = () => {
+  const cells = R.playableCells(game);
+  playableSet = new Set(cells.map(R.keyOf));
+  gGrid.classList.toggle('opening-hint', game.cursor === 0);
   const frag = document.createDocumentFragment();
-  for (let r = rmin; r <= rmax; r++) {
-    const qL = qLeftFn(r), qR = qRightFn(r);
-    for (let q = qL; q <= qR; q++) {
-      const p = axialToPixel(q, r);
-      const poly = document.createElementNS(SVGNS, 'polygon');
-      poly.setAttribute('class', 'hex-grid');
-      poly.setAttribute('points', HEX_POINTS);
-      poly.setAttribute('transform', `translate(${p.x} ${p.y})`);
-      frag.append(poly);
-    }
+  for (const c of cells) {
+    const p = axialToPixel(c.q, c.r);
+    const poly = document.createElementNS(SVGNS, 'polygon');
+    poly.setAttribute('class', 'hex-grid');
+    poly.setAttribute('points', HEX_POINTS);
+    poly.setAttribute('transform', `translate(${p.x} ${p.y})`);
+    frag.append(poly);
   }
   gGrid.replaceChildren(frag);
 };
 
 /* ============================ Stones + markup rendering ============================ */
-const mkHexAt = (parent, q, r, cls, animate) => {
+// Position lives on a wrapping <g>; the scale-in animation runs on the inner
+// <polygon> so it scales about the hex's own center and never displaces it — the
+// stone is at its final spot from the first frame (instant), the pop is cosmetic.
+const mkStone = (q, r, cls, animate) => {
   const p = axialToPixel(q, r);
+  const g = document.createElementNS(SVGNS, 'g');
+  g.setAttribute('transform', `translate(${p.x} ${p.y})`);
   const poly = document.createElementNS(SVGNS, 'polygon');
   poly.setAttribute('class', cls + (animate ? ' settle' : ''));
   poly.setAttribute('points', HEX_POINTS);
-  poly.setAttribute('transform', `translate(${p.x} ${p.y})`);
-  poly.style.transformBox = 'fill-box';
-  poly.style.transformOrigin = 'center';
-  parent.append(poly);
-  return poly;
+  g.append(poly);
+  gStones.append(g);
 };
 
 let prevCommitted = 0;
@@ -528,7 +553,7 @@ const renderStones = () => {
     let cls = `stone p${m.player}`;
     if (winKeys && winKeys.has(R.keyOf(m))) cls += ' win';
     else if (isLast) cls += ' last';
-    mkHexAt(gStones, m.q, m.r, cls, justPlaced && isLast);
+    mkStone(m.q, m.r, cls, justPlaced && isLast);
   });
   prevCommitted = committed.length;
 };
@@ -583,7 +608,21 @@ const setHud = () => {
 };
 
 /* ============================ Commit helpers ============================ */
-const renderState = () => { renderStones(); renderMarks(); setHud(); persist(); };
+const renderHover = (cell) => {
+  gHover.replaceChildren();
+  if (!cell || !playableSet.has(R.keyOf(cell))) return;
+  const p = axialToPixel(cell.q, cell.r);
+  const poly = document.createElementNS(SVGNS, 'polygon');
+  poly.setAttribute('class', `ghost p${R.currentPlayer(game)}`);
+  poly.setAttribute('points', HEX_POINTS);
+  poly.setAttribute('transform', `translate(${p.x} ${p.y})`);
+  gHover.append(poly);
+};
+const renderState = () => {
+  renderPlayable(); renderStones(); renderMarks(); setHud();
+  gHover.replaceChildren(); // stale hover cleared; reappears on next mouse move
+  persist();
+};
 const setGame = (next) => { if (next) { game = next; renderState(); } };
 
 /* ============================ Toast ============================ */
@@ -672,6 +711,7 @@ const startPinch = () => {
 board.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 && e.button !== 2) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  gHover.replaceChildren(); // hide the placement ghost while interacting
   if (pointers.size === 2) { startPinch(); return; }
   if (pointers.size > 2) return;
   board.setPointerCapture(e.pointerId);
@@ -698,7 +738,12 @@ board.addEventListener('pointermove', (e) => {
     applyTransform();
     return;
   }
-  if (!drag || e.pointerId !== drag.id) return;
+  if (!drag || e.pointerId !== drag.id) {
+    if (!drag && !pinch && e.pointerType === 'mouse') {
+      renderHover(screenToCell(e.clientX, e.clientY));
+    }
+    return;
+  }
   const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
   if (!drag.moved && Math.hypot(dx, dy) > CLICK_SLOP) drag.moved = true;
   if (drag.marking) {
@@ -730,6 +775,7 @@ const endDrag = (e) => {
 board.addEventListener('pointerup', endDrag);
 board.addEventListener('pointercancel', endDrag);
 board.addEventListener('contextmenu', (e) => e.preventDefault());
+board.addEventListener('pointerleave', () => { if (!drag) gHover.replaceChildren(); });
 
 /* ============================ Zoom ============================ */
 board.addEventListener('wheel', (e) => {

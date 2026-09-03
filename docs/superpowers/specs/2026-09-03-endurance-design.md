@@ -31,8 +31,14 @@ dependencies, no build step, double-click to run. Internal sections:
 ## Coordinate system & rendering
 
 - Axial coords `(q, r)` for pointy-top hexes; distance via cube coords.
-- Infinite board: render only hexes within the viewport + margin. Layers: faint empty
-  grid → placed hexes → markup overlay.
+- Render only the **legal placement cells** (the center to open, then the union of
+  radius-8 disks around existing hexes, minus occupied). This is both the grid and
+  the "where can I play" affordance; the board beyond it is empty. Because the set is
+  bounded, panning/zooming is a pure transform with nothing to regenerate. A hover
+  ghost previews placement in the current player's color.
+- Placement is **instant**: the hex is at its final position on the first frame; a
+  fast (~130ms) scale-in runs on an inner element so it never displaces the hex, so
+  rapid play stays responsive.
 - Pan (LMB drag) = translate offset; zoom (wheel/pinch) = scale about cursor. View is
   never part of game state logic (though last view may be persisted for convenience).
   Auto-center on center hex at game start.
@@ -49,11 +55,14 @@ dependencies, no build step, double-click to run. Internal sections:
 
 ## Share links
 
-- **Share** button encodes full state as base64 into `?g=<b64>` and copies the link.
+- **Share** button encodes the committed position into `?g=<compact>` and copies the
+  link. The encoding is a compact URL-safe string (`1.<coords>.<markups>`, only digits
+  and `.`/`_`/`-`) — no base64 or JSON, so links stay short and legible. Players are
+  rederived from placement order, so only coordinates travel.
 - On load, if `?g=` present: decode and load. If it differs from the saved local game,
   **ask before replacing** and keep the previous game recoverable (never silently
   clobber).
-- Markup is included in the encoded state; encoding kept compact.
+- Markup is included in the encoded state.
 
 ## Interaction model (copied from HEXO's board-help card)
 
